@@ -1,4 +1,4 @@
-import 'dart:convert'; // <--- ADDED THIS IMPORT
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -21,20 +21,18 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
   String currentFinger = "";
   Uint8List? livePreviewImage;
 
-  // Data Store: Maps finger name (e.g., 'right_index') to its data
+  // Data Store
   Map<String, Uint8List> capturedTemplates = {};
-  Map<String, Uint8List> capturedImages = {}; // For saving to file later
-  Map<String, String> fingerQualities = {}; // Display string "Q:80 N:1"
+  Map<String, Uint8List> capturedImages = {};
+  Map<String, String> fingerQualities = {};
 
   @override
   void dispose() {
-    // Stop capture if user backs out
     if (isCapturing) {
       if (mounted) {
         Provider.of<AppStateProvider>(context, listen: false).service.stopCapture();
       }
     }
-    // Clear callbacks to avoid leaks
     if (mounted) {
       var service = Provider.of<AppStateProvider>(context, listen: false).service;
       service.onLivePreview = null;
@@ -46,7 +44,6 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
   @override
   void initState() {
     super.initState();
-    // Use addPostFrameCallback to safely access Provider after build
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _setupListeners();
     });
@@ -55,7 +52,6 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
   void _setupListeners() {
     final service = Provider.of<AppStateProvider>(context, listen: false).service;
 
-    // 1. Live Preview Listener
     service.onLivePreview = (errorCode, quality, image) {
       if (mounted && image != null) {
         setState(() {
@@ -65,29 +61,19 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
       }
     };
 
-    // 2. Capture Complete Listener
     service.onCaptureComplete = (errorCode, quality, nfiq, image) async {
       if (!mounted) return;
 
       if (errorCode == 0) {
         setState(() => status = "Processing...");
-
-        // A. Get Final Image (BMP) for UI and File Storage
-        // 0 = BMP
-        Uint8List? finalImg = await service.getImage(0);
-
-        // B. Get Template (FMR V2011) for Database
-        // 1 = FMR_V2011
-        Uint8List? template = await service.getTemplate(1);
+        Uint8List? finalImg = await service.getImage(0); // 0 = BMP
+        Uint8List? template = await service.getTemplate(1); // 1 = FMR_V2011
 
         if (finalImg != null && template != null) {
           setState(() {
-            // Store Data
             capturedImages[currentFinger] = finalImg;
             capturedTemplates[currentFinger] = template;
             fingerQualities[currentFinger] = "Q:$quality N:$nfiq";
-
-            // Reset UI
             livePreviewImage = null;
             isCapturing = false;
             status = "Capture Success!";
@@ -107,12 +93,9 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
     };
   }
 
-  // --- Actions ---
-
   Future<void> _startCapture(String fingerKey) async {
     if (isCapturing) return;
 
-    // Reset previous data for this finger
     setState(() {
       currentFinger = fingerKey;
       isCapturing = true;
@@ -121,19 +104,13 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
     });
 
     final service = Provider.of<AppStateProvider>(context, listen: false).service;
-
-    // Stop any previous capture just in case
     await service.stopCapture();
-
-    // Wait a bit, then start
     await Future.delayed(Duration(milliseconds: 200));
 
     if (!mounted) return;
     setState(() => status = "Place finger on sensor...");
 
-    // 60 min quality, 10000ms timeout
     int ret = await service.startCapture(quality: 60, timeout: 10000);
-
     if (ret != 0) {
       if (mounted) {
         setState(() {
@@ -177,27 +154,20 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
     }
 
     try {
-      // 1. Prepare data for Database
       Map<String, dynamic> userMap = {};
-
-      // Convert raw bytes to Base64 String so they can be stored in SQLite TEXT fields
       capturedTemplates.forEach((key, value) {
         userMap[key] = base64Encode(value);
       });
 
-      // 2. Insert into DB
       int userId = await DatabaseHelper.instance.addUser(_nameController.text, userMap);
 
       if (userId > 0) {
-        // 3. Save Images to File System
         await FileUtils.requestStoragePermission();
-
         for (var entry in capturedImages.entries) {
           await FileUtils.saveUserFingerImage(userId, entry.key, entry.value);
         }
-
         Fluttertoast.showToast(msg: "User Enrolled! ID: $userId");
-        if (mounted) Navigator.pop(context); // Go back to Home
+        if (mounted) Navigator.pop(context);
       } else {
         Fluttertoast.showToast(msg: "Database Error");
       }
@@ -207,15 +177,12 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
     }
   }
 
-  // --- UI Building Blocks ---
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text("New Enrollment"), backgroundColor: Colors.white, foregroundColor: Colors.black, elevation: 1),
       body: Column(
         children: [
-          // Name Input
           Container(
             padding: EdgeInsets.all(16),
             color: Colors.white,
@@ -238,10 +205,7 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
                   _buildHandSection("Left Hand", ["left_little", "left_ring", "left_middle", "left_index", "left_thumb"]),
                   SizedBox(height: 20),
                   _buildHandSection("Right Hand", ["right_thumb", "right_index", "right_middle", "right_ring", "right_little"]),
-
                   SizedBox(height: 20),
-
-                  // Status & Preview Box
                   Container(
                     width: double.infinity,
                     padding: EdgeInsets.all(16),
@@ -266,7 +230,6 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
             ),
           ),
 
-          // Bottom Buttons
           Container(
             padding: EdgeInsets.all(16),
             color: Colors.white,
@@ -319,6 +282,7 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
     );
   }
 
+  // --- UPDATED FINGER ITEM LOGIC ---
   Widget _buildFingerItem(String key) {
     String label = key.split('_')[1];
     label = label[0].toUpperCase() + label.substring(1);
@@ -326,30 +290,44 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
     bool isSelected = (currentFinger == key);
     bool hasData = capturedTemplates.containsKey(key);
 
-    Color borderColor = Colors.grey.shade300;
-    if (hasData) borderColor = Colors.green;
-    if (isSelected) borderColor = Colors.blue;
+    // 1. Border Logic
+    Color borderColor = Colors.grey.shade300; // Default Grey
+    double borderWidth = 1.0;
+
+    if (hasData) {
+      borderColor = Colors.green; // Success Green
+      borderWidth = 2.0;
+    } else if (isSelected) {
+      borderColor = Colors.blue; // Selected Blue
+      borderWidth = 2.0;
+    }
+
+    // 2. Icon/Image Logic
+    Widget content;
+    if (hasData) {
+      // Show captured image
+      content = Image.memory(capturedImages[key]!, height: 40, width: 30, fit: BoxFit.contain);
+    } else {
+      // Show Blue Icon by default (Always Visible)
+      content = Icon(Icons.fingerprint, color: Colors.blue, size: 36);
+    }
 
     return GestureDetector(
       onTap: () => _startCapture(key),
       child: Container(
         width: 60,
-        height: 85,
+        height: 90,
         decoration: BoxDecoration(
           color: Colors.white,
-          border: Border.all(color: borderColor, width: (isSelected || hasData) ? 2 : 1),
+          border: Border.all(color: borderColor, width: borderWidth),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(label, style: TextStyle(fontSize: 10, color: Colors.grey[700])),
-            SizedBox(height: 4),
-            if (hasData)
-              Image.memory(capturedImages[key]!, height: 40, width: 30, fit: BoxFit.contain)
-            else
-              Icon(Icons.fingerprint, color: isSelected ? Colors.blue : Colors.grey[300], size: 30),
-
+            SizedBox(height: 5),
+            content,
             SizedBox(height: 4),
             Text(
               hasData ? fingerQualities[key]! : "-",

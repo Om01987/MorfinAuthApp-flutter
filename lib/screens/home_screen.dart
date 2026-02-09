@@ -1,17 +1,17 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:path_provider/path_provider.dart';
 import '../providers/app_state_provider.dart';
 import '../database/database_helper.dart';
 
 class HomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    // Re-fetch user count when screen comes into focus
     Provider.of<AppStateProvider>(context, listen: false).refreshUserCount();
 
     final appState = Provider.of<AppStateProvider>(context);
 
-    // Colors from your RN design
     final Color headerBg = Color(0xFF0F172A);
     final Color statusGreen = Color(0xFF22C55E);
     final Color statusRed = Color(0xFFEF4444);
@@ -23,7 +23,7 @@ class HomeScreen extends StatelessWidget {
       body: Stack(
         children: [
           SingleChildScrollView(
-            padding: EdgeInsets.only(bottom: 100),
+            padding: EdgeInsets.only(bottom: 120),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -61,7 +61,6 @@ class HomeScreen extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Status Row
                         Row(
                           children: [
                             Container(width: 8, height: 8, decoration: BoxDecoration(color: appState.isConnected ? statusGreen : statusRed, shape: BoxShape.circle)),
@@ -74,14 +73,16 @@ class HomeScreen extends StatelessWidget {
                         ),
                         Divider(height: 32),
 
-                        // Device Details
                         _detailRow("Make", appState.deviceDetails['Make']),
                         _detailRow("Model", appState.deviceDetails['Model']),
                         _detailRow("Serial", appState.deviceDetails['SerialNo']),
-                        _detailRow("W/H", "${appState.deviceDetails['Width']}x${appState.deviceDetails['Height']}"),
+
+                        _detailRow("W/H", appState.isInitialized
+                            ? "${appState.deviceDetails['Width']}x${appState.deviceDetails['Height']}"
+                            : "-"
+                        ),
                         SizedBox(height: 20),
 
-                        // Init/Uninit Buttons
                         Row(
                           children: [
                             Expanded(
@@ -177,9 +178,9 @@ class HomeScreen extends StatelessWidget {
             ),
           ),
 
-          // --- Bottom Bar ---
           Positioned(
-            bottom: 20, left: 20, right: 20,
+            bottom: 10,
+            left: 20, right: 20,
             child: Container(
               padding: EdgeInsets.all(12),
               decoration: BoxDecoration(color: Color(0xFF334155), borderRadius: BorderRadius.circular(8), boxShadow: [BoxShadow(blurRadius: 5, color: Colors.black26)]),
@@ -239,25 +240,90 @@ class HomeScreen extends StatelessWidget {
     );
   }
 
+  // --- CHANGED: Standard Radio Buttons Logic ---
   void _showDeleteDialog(BuildContext context, AppStateProvider appState) {
+    // 1. Define the selected value. Default to Option 1.
+    int? _selectedValue = 1;
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text("Delete Data"),
-        content: Text("Are you sure you want to clear the database?"),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text("Cancel")),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(ctx);
-              await DatabaseHelper.instance.clearDatabase();
-              appState.refreshUserCount();
-              // TODO: Clear file system logic can be added here
-            },
-            child: Text("DELETE", style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
+      builder: (ctx) {
+        // 2. Use StatefulBuilder to update radio selection inside Dialog
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: Text("Delete Data Options"),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  RadioListTile<int>(
+                    title: Text("Clear Files"),
+                    value: 1,
+                    groupValue: _selectedValue,
+                    onChanged: (int? val) {
+                      setState(() => _selectedValue = val);
+                    },
+                  ),
+                  RadioListTile<int>(
+                    title: Text("Clear Database"),
+                    value: 2,
+                    groupValue: _selectedValue,
+                    onChanged: (int? val) {
+                      setState(() => _selectedValue = val);
+                    },
+                  ),
+                  RadioListTile<int>(
+                    title: Text("Clear Both"),
+                    value: 3,
+                    groupValue: _selectedValue,
+                    onChanged: (int? val) {
+                      setState(() => _selectedValue = val);
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: Text("Cancel"),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+
+                    // Logic based on selection
+                    if (_selectedValue == 1 || _selectedValue == 3) {
+                      await _deleteLocalFiles();
+                    }
+                    if (_selectedValue == 2 || _selectedValue == 3) {
+                      await DatabaseHelper.instance.clearDatabase();
+                    }
+
+                    appState.refreshUserCount();
+                  },
+                  child: Text("DELETE", style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
+  }
+
+  Future<void> _deleteLocalFiles() async {
+    try {
+      final Directory? appDocDir = await getExternalStorageDirectory();
+      final Directory rootDir = appDocDir ?? await getApplicationDocumentsDirectory();
+      final Directory fingerDataDir = Directory('${rootDir.path}/FingerData');
+
+      if (await fingerDataDir.exists()) {
+        await fingerDataDir.delete(recursive: true);
+        print("FingerData folder deleted.");
+      }
+    } catch (e) {
+      print("Error deleting files: $e");
+    }
   }
 }
