@@ -28,16 +28,25 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
 
   @override
   void dispose() {
-    if (isCapturing) {
-      if (mounted) {
-        Provider.of<AppStateProvider>(context, listen: false).service.stopCapture();
+    // FIX 1: Safe Dispose Logic
+    // We wrap this in a try-catch because sometimes the context is already invalid
+    // if the app is shutting down fast.
+    try {
+      final appState = Provider.of<AppStateProvider>(context, listen: false);
+
+      // Kill the listeners IMMEDIATELY so no more UI updates try to run
+      appState.service.onLivePreview = null;
+      appState.service.onCaptureComplete = null;
+
+      // CRITICAL FIX: Only tell the hardware to stop if it is actually connected.
+      // If isConnected is false, the device is gone, so calling StopCapture would crash the app.
+      if (isCapturing && appState.isConnected) {
+        appState.service.stopCapture();
       }
+    } catch (e) {
+      print("Safe Dispose Error: $e");
     }
-    if (mounted) {
-      var service = Provider.of<AppStateProvider>(context, listen: false).service;
-      service.onLivePreview = null;
-      service.onCaptureComplete = null;
-    }
+
     super.dispose();
   }
 
@@ -94,7 +103,15 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
   }
 
   Future<void> _startCapture(String fingerKey) async {
+    // 1. Safety Check: Don't start if already capturing
     if (isCapturing) return;
+
+    // 2. Safety Check: Don't start if device is disconnected
+    final appState = Provider.of<AppStateProvider>(context, listen: false);
+    if (!appState.isConnected) {
+      Fluttertoast.showToast(msg: "Device is disconnected!");
+      return;
+    }
 
     setState(() {
       currentFinger = fingerKey;
@@ -103,7 +120,7 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
       status = "Initializing Sensor...";
     });
 
-    final service = Provider.of<AppStateProvider>(context, listen: false).service;
+    final service = appState.service;
     await service.stopCapture();
     await Future.delayed(Duration(milliseconds: 200));
 
@@ -179,6 +196,23 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // 1. Listen to the AppState (Brain)
+    final appState = Provider.of<AppStateProvider>(context);
+
+    // 2. FIX 2: Security Check with Safe Navigation
+    // If the brain says "Disconnected", kick the user out safely.
+    if (!appState.isConnected) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        // 'mounted' check is crucial. It prevents popping if we are already gone.
+        if (mounted) {
+          // Use popUntil to go back to the FIRST screen (Home)
+          // This prevents "Black Screen" issues if you pop the last route.
+          Navigator.of(context).popUntil((route) => route.isFirst);
+          Fluttertoast.showToast(msg: "Device disconnected");
+        }
+      });
+    }
+
     return Scaffold(
       appBar: AppBar(title: Text("New Enrollment"), backgroundColor: Colors.white, foregroundColor: Colors.black, elevation: 1),
       body: Column(
@@ -282,7 +316,6 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
     );
   }
 
-  // --- UPDATED FINGER ITEM LOGIC ---
   Widget _buildFingerItem(String key) {
     String label = key.split('_')[1];
     label = label[0].toUpperCase() + label.substring(1);
@@ -290,25 +323,21 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
     bool isSelected = (currentFinger == key);
     bool hasData = capturedTemplates.containsKey(key);
 
-    // 1. Border Logic
-    Color borderColor = Colors.grey.shade300; // Default Grey
+    Color borderColor = Colors.grey.shade300;
     double borderWidth = 1.0;
 
     if (hasData) {
-      borderColor = Colors.green; // Success Green
+      borderColor = Colors.green;
       borderWidth = 2.0;
     } else if (isSelected) {
-      borderColor = Colors.blue; // Selected Blue
+      borderColor = Colors.blue;
       borderWidth = 2.0;
     }
 
-    // 2. Icon/Image Logic
     Widget content;
     if (hasData) {
-      // Show captured image
       content = Image.memory(capturedImages[key]!, height: 40, width: 30, fit: BoxFit.contain);
     } else {
-      // Show Blue Icon by default (Always Visible)
       content = Icon(Icons.fingerprint, color: Colors.blue, size: 36);
     }
 
