@@ -3,8 +3,9 @@ import 'package:provider/provider.dart';
 import 'providers/app_state_provider.dart';
 import 'screens/home_screen.dart';
 import 'screens/enrollment_screen.dart';
+import 'screens/user_list_screen.dart';
 // import 'screens/matching_screen.dart'; // We will enable this later
-// import 'screens/user_list_screen.dart'; // We will enable this later
+
 
 void main() {
   runApp(const MyApp());
@@ -34,7 +35,7 @@ class MyApp extends StatelessWidget {
         routes: {
           '/enroll': (context) => EnrollmentScreen(),
           // '/match': (context) => MatchingScreen(), // Uncomment later
-          // '/users': (context) => UserListScreen(), // Uncomment later
+          '/users': (context) => UserListScreen(),
         },
       ),
     );
