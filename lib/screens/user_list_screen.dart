@@ -19,7 +19,7 @@ class _UserListScreenState extends State<UserListScreen> {
   }
 
   Future<void> _fetchUsers() async {
-    final data = await DatabaseHelper.instance.getAllUsers();
+    final data = await DatabaseHelper.instance.getAllUsersLite();
     setState(() {
       users = data;
       isLoading = false;

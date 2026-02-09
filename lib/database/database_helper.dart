@@ -50,6 +50,17 @@ class DatabaseHelper {
     return await db.query('users');
   }
 
+  // lightweight fetch (getAllUsersLite)
+  Future<List<Map<String, dynamic>>> getAllUsersLite() async {
+    final db = await instance.database;
+
+    // Instead of query('users'), we specify ONLY the columns we need
+    return await db.query(
+        'users',
+        columns: ['id', 'user_name'] // This ignores all the fingerprint columns!
+    );
+  }
+
   Future<int> deleteUser(int id) async {
     final db = await instance.database;
     return await db.delete('users', where: 'id = ?', whereArgs: [id]);
