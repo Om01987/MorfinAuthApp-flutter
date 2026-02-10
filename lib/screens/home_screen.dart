@@ -27,7 +27,7 @@ class HomeScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // --- Header ---
+                // Header
                 Container(
                   color: headerBg,
                   padding: EdgeInsets.fromLTRB(24, 60, 24, 80),
@@ -47,7 +47,7 @@ class HomeScreen extends StatelessWidget {
                   ),
                 ),
 
-                // --- Status Card ---
+                // Status Card
                 Transform.translate(
                   offset: Offset(0, -50),
                   child: Container(
@@ -115,7 +115,7 @@ class HomeScreen extends StatelessWidget {
                   ),
                 ),
 
-                // --- Grid Cards ---
+                // Grid Cards
                 Padding(
                   padding: EdgeInsets.symmetric(horizontal: 20),
                   child: Row(
@@ -139,7 +139,7 @@ class HomeScreen extends StatelessWidget {
 
                 SizedBox(height: 30),
 
-                // --- Data Management ---
+                // Data Management
                 Padding(
                   padding: EdgeInsets.symmetric(horizontal: 20),
                   child: Column(
@@ -240,15 +240,15 @@ class HomeScreen extends StatelessWidget {
     );
   }
 
-  // --- CHANGED: Standard Radio Buttons Logic ---
+  //  Radio Buttons for delete
   void _showDeleteDialog(BuildContext context, AppStateProvider appState) {
-    // 1. Define the selected value. Default to Option 1.
+    // Default to Option 1
     int? _selectedValue = 1;
 
     showDialog(
       context: context,
       builder: (ctx) {
-        // 2. Use StatefulBuilder to update radio selection inside Dialog
+        // StatefulBuilder to update radio selection inside Dialog
         return StatefulBuilder(
           builder: (context, setState) {
             return AlertDialog(
@@ -292,7 +292,7 @@ class HomeScreen extends StatelessWidget {
                   onPressed: () async {
                     Navigator.pop(ctx);
 
-                    // Logic based on selection
+                    // Delete Logic based on selection
                     if (_selectedValue == 1 || _selectedValue == 3) {
                       await _deleteLocalFiles();
                     }

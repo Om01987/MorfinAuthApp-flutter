@@ -28,17 +28,15 @@ class _EnrollmentScreenState extends State<EnrollmentScreen> {
 
   @override
   void dispose() {
-    // FIX 1: Safe Dispose Logic
-    // We wrap this in a try-catch because sometimes the context is already invalid
-    // if the app is shutting down fast.
+
     try {
       final appState = Provider.of<AppStateProvider>(context, listen: false);
 
-      // Kill the listeners IMMEDIATELY so no more UI updates try to run
+      // Kill the listeners IMMEDIATELY , no more UI updates try to run
       appState.service.onLivePreview = null;
       appState.service.onCaptureComplete = null;
 
-      // CRITICAL FIX: Only tell the hardware to stop if it is actually connected.
+      //  Only tell the hardware to stop if it is actually connected.
       // If isConnected is false, the device is gone, so calling StopCapture would crash the app.
       if (isCapturing && appState.isConnected) {
         appState.service.stopCapture();

@@ -26,7 +26,7 @@ class _UserListScreenState extends State<UserListScreen> {
     });
   }
 
-  // --- Update Name Logic ---
+  // Update Name Logic
   Future<void> _showEditDialog(Map<String, dynamic> user) async {
     TextEditingController _controller = TextEditingController(text: user['user_name']);
 
@@ -95,7 +95,7 @@ class _UserListScreenState extends State<UserListScreen> {
       backgroundColor: Color(0xFFF1F5F9),
       body: Column(
         children: [
-          // --- Table Header ---
+          // Table Header
           Container(
             padding: EdgeInsets.symmetric(vertical: 15, horizontal: 10),
             color: Color(0xFF1E293B),
@@ -108,7 +108,7 @@ class _UserListScreenState extends State<UserListScreen> {
             ),
           ),
 
-          // --- User List ---
+          // User List
           Expanded(
             child: isLoading
                 ? Center(child: CircularProgressIndicator())
