@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_state_provider.dart';
@@ -13,21 +14,25 @@ class MatchingScreen extends StatefulWidget {
 class _MatchingScreenState extends State<MatchingScreen> {
   // UI State
   String status = "Ready to Match";
-  String resultText = "";
-  Color statusColor = Colors.black;
+  Color statusColor = Colors.grey;
   bool isScanning = false;
+  bool stopScanning = false;
   Uint8List? livePreviewImage;
 
-  // The list of column names in your DB representing fingers
+  // Data
+  List<Map<String, dynamic>> matchedResults = [];
+
+  // Database Columns
   final List<String> fingerColumns = [
     'left_thumb', 'left_index', 'left_middle', 'left_ring', 'left_little',
     'right_thumb', 'right_index', 'right_middle', 'right_ring', 'right_little'
   ];
 
+  Timer? _debounceTimer; // To throttle preview updates if needed
+
   @override
   void initState() {
     super.initState();
-    // Setup listeners after the widget is built
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _setupListeners();
     });
@@ -35,17 +40,10 @@ class _MatchingScreenState extends State<MatchingScreen> {
 
   @override
   void dispose() {
-    // Stop capture if leaving screen
-    if (isScanning) {
-      if (mounted) {
-        Provider.of<AppStateProvider>(context, listen: false).service.stopCapture();
-      }
-    }
-    // Clean up listeners
+    stopScanning = true;
+    _debounceTimer?.cancel();
     if (mounted) {
-      var service = Provider.of<AppStateProvider>(context, listen: false).service;
-      service.onLivePreview = null;
-      service.onCaptureComplete = null;
+      Provider.of<AppStateProvider>(context, listen: false).service.stopCapture();
     }
     super.dispose();
   }
@@ -54,244 +52,340 @@ class _MatchingScreenState extends State<MatchingScreen> {
     final service = Provider.of<AppStateProvider>(context, listen: false).service;
 
     // 1. Live Preview
+    // We only update if we are actively scanning and haven't finished a capture yet.
     service.onLivePreview = (errorCode, quality, image) {
-      if (mounted && image != null) {
+      if (mounted && image != null && isScanning) {
         setState(() {
           livePreviewImage = image;
           status = "Quality: $quality";
+          statusColor = Colors.blue;
         });
       }
     };
 
     // 2. Capture Complete
     service.onCaptureComplete = (errorCode, quality, nfiq, image) async {
-      if (!mounted) return;
+      if (!mounted || stopScanning) return;
 
       if (errorCode == 0) {
         setState(() => status = "Processing...");
 
-        // Get the live template to match against DB
-        // 1 = FMR_V2011 (Standard Template format)
-        Uint8List? liveTemplate = await service.getTemplate(1);
-
-        // Also get the image for display
-        Uint8List? finalImg = await service.getImage(0);
+        // Fetch Template & Image
+        Uint8List? liveTemplate = await service.getTemplate(1); // FMR_V2011
+        Uint8List? finalImg = await service.getImage(0); // BMP
 
         if (liveTemplate != null) {
+          // Freeze the final image on screen
           if (finalImg != null) {
             setState(() => livePreviewImage = finalImg);
           }
-          // Start the 1:N Matching Loop
-          await _perform1NMatching(liveTemplate);
+          await _performMatching(liveTemplate);
         } else {
-          _updateStatus("Template generation failed", Colors.red);
+          // Template failed (bad capture?), treat as no-match cycle
+          _handleResetCycle("Capture Error", false);
         }
-      } else {
-        _updateStatus("Capture Failed: $errorCode", Colors.red);
       }
-
-      setState(() => isScanning = false);
+      else if (errorCode == -2019) {
+        // Timeout -> Clear everything and retry immediately
+        _handleTimeout();
+      }
+      else {
+        // Other Errors -> Show error, wait, then retry
+        _updateStatus("Error: $errorCode", Colors.red);
+        // We do NOT clear list here, just retry
+        Future.delayed(Duration(seconds: 2), () => _startCaptureLoop());
+      }
     };
   }
 
-  // Matching Logic (Cursor Style)
-  Future<void> _perform1NMatching(Uint8List liveTemplate) async {
+  // --- Logic Control ---
+
+  void _startScanningSession() {
     setState(() {
-      status = "Searching Database...";
-      resultText = "";
+      stopScanning = false;
+      isScanning = true;
+      matchedResults.clear();
+      livePreviewImage = null; // Reset to blue icon state
+    });
+    _startCaptureLoop();
+  }
+
+  void _stopScanningSession() async {
+    setState(() {
+      stopScanning = true;
+      isScanning = false;
+      status = "Scanning Stopped";
+      statusColor = Colors.grey;
+      livePreviewImage = null; // Reset to grey icon
+    });
+    final service = Provider.of<AppStateProvider>(context, listen: false).service;
+    await service.stopCapture();
+  }
+
+  Future<void> _startCaptureLoop() async {
+    if (stopScanning || !mounted) return;
+
+    setState(() {
+      status = "Place Finger...";
+      statusColor = Colors.black;
+      // CRITICAL CHANGE: We do NOT clear matchedResults here.
+      // We only clear the list if it's a "Timeout" reset or a new session start.
+      // We DO clear the preview to show the "Ready" state.
+      livePreviewImage = null;
     });
 
     final service = Provider.of<AppStateProvider>(context, listen: false).service;
 
-    // 1. Fetch all users (Simulates getting the Cursor)
+    // Stop previous capture to be safe
+    await service.stopCapture();
+    await Future.delayed(Duration(milliseconds: 100));
+
+    // Start
+    int ret = await service.startCapture(quality: 60, timeout: 10000);
+
+    if (ret != 0) {
+      _updateStatus("Start Failed: $ret", Colors.red);
+      Future.delayed(Duration(seconds: 2), () => _startCaptureLoop());
+    }
+  }
+
+  void _handleTimeout() {
+    if (!mounted) return;
+    print("Timeout - Resetting UI and Retrying");
+    setState(() {
+      matchedResults.clear(); // Clear list on Timeout
+      livePreviewImage = null; // Clear image -> Show Blue/Grey Icon
+      status = "Timeout. Retrying...";
+      statusColor = Colors.orange;
+    });
+    _startCaptureLoop(); // Restart immediately
+  }
+
+  // --- Matching Logic ---
+
+  Future<void> _performMatching(Uint8List liveTemplate) async {
+    final service = Provider.of<AppStateProvider>(context, listen: false).service;
     List<Map<String, dynamic>> users = await DatabaseHelper.instance.getAllUsers();
 
     if (users.isEmpty) {
-      _updateStatus("Database is empty", Colors.orange);
+      _handleResetCycle("Database Empty", false);
       return;
     }
 
-    bool matchFound = false;
-    int bestScore = 0;
-    String matchedName = "";
-    int matchedId = -1;
+    // Clear previous matches for this new scan!
+    // "if new successful capture happens and matching is to be done -> clear list"
+    setState(() {
+      matchedResults.clear();
+    });
 
-    // 2. Iterate through Users (Row by Row)
+    int matchCount = 0;
+
+    // Scan all users
     for (var user in users) {
-      // 3. Iterate through Fingers for this User
       for (String fingerCol in fingerColumns) {
         String? b64Template = user[fingerCol];
-
         if (b64Template != null && b64Template.isNotEmpty) {
           try {
-            // Decode stored template
             Uint8List storedTemplate = base64Decode(b64Template);
-
-            // Native Match Call
             int score = await service.matchTemplates(
                 liveTemplate: liveTemplate,
                 storedTemplate: storedTemplate
             );
 
-            // Logic: Immediate stop on high match (Standard logic)
             if (score >= 96) {
-              matchFound = true;
-              bestScore = score;
-              matchedName = user['user_name'];
-              matchedId = user['id'];
-              break; // Break finger loop
+              _addMatchResult(user['user_name'], user['id'], score);
+              matchCount++;
+              break; // Found this user, move to next user
             }
           } catch (e) {
-            print("Error matching $fingerCol for user ${user['id']}: $e");
+            print("Match error: $e");
           }
         }
       }
-      if (matchFound) break; // Break user loop (Cursor stop)
     }
 
-    // 4. Show Result
-    if (matchFound) {
-      _updateStatus("Match Found!", Colors.green);
-      _showResultDialog(matchedName, matchedId, bestScore);
+    if (matchCount > 0) {
+      _handleResetCycle("Found $matchCount Matches", true);
     } else {
-      _updateStatus("No Match Found", Colors.red);
+      _handleResetCycle("No Match Found", false);
     }
   }
 
-  // --- UI Actions ---
+  void _addMatchResult(String name, int id, int score) {
+    setState(() {
+      // Add to top of list
+      matchedResults.insert(0, {
+        'name': name,
+        'id': id,
+        'score': score,
+        'time': DateTime.now().toString().substring(11, 19)
+      });
+    });
+  }
 
-  Future<void> _startCapture() async {
-    if (isScanning) return;
+  // Handles the "Show Result -> Wait 2s -> Reset" cycle
+  void _handleResetCycle(String msg, bool isSuccess) {
+    if (!mounted) return;
 
     setState(() {
-      isScanning = true;
-      livePreviewImage = null;
-      status = "Place Finger...";
-      resultText = "";
-      statusColor = Colors.black;
+      status = msg;
+      statusColor = isSuccess ? Colors.green : Colors.red;
     });
 
-    final service = Provider.of<AppStateProvider>(context, listen: false).service;
-
-    // Safety stop
-    await service.stopCapture();
-    await Future.delayed(Duration(milliseconds: 200));
-
-    // Start
-    int ret = await service.startCapture(quality: 60, timeout: 10000);
-    if (ret != 0) {
-      _updateStatus("Failed to start scanner: $ret", Colors.red);
-      setState(() => isScanning = false);
-    }
+    Future.delayed(Duration(seconds: 2), () {
+      if (!stopScanning && mounted) {
+        // We do NOT clear the list here.
+        // Logic: matched result should stay until next successful capture starts matching logic
+        _startCaptureLoop();
+      }
+    });
   }
 
   void _updateStatus(String msg, Color color) {
-    if (mounted) {
-      setState(() {
-        status = msg;
-        statusColor = color;
-      });
-    }
+    if (mounted) setState(() { status = msg; statusColor = color; });
   }
 
-  void _showResultDialog(String name, int id, int score) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Column(
-          children: [
-            Icon(Icons.check_circle, color: Colors.green, size: 50),
-            SizedBox(height: 10),
-            Text("Authentication Success"),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text("User: $name", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            Text("ID: $id", style: TextStyle(fontSize: 16)),
-            Divider(),
-            Text("Match Score: $score", style: TextStyle(color: Colors.grey)),
-          ],
-        ),
-        actions: [
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text("OK"),
-          )
+  // --- UI Building ---
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Color(0xFFF5F5F5), // Light Grey bg like RN
+      appBar: AppBar(
+        title: Text("Biometric Match"),
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        elevation: 1,
+        centerTitle: true,
+      ),
+      body: Column(
+        children: [
+          // 1. Preview Section (Top Center)
+          Container(
+            width: double.infinity,
+            padding: EdgeInsets.symmetric(vertical: 20),
+            color: Colors.white,
+            child: Column(
+              children: [
+                // Image Box
+                Container(
+                  width: 120,
+                  height: 150,
+                  decoration: BoxDecoration(
+                      color: Colors.white,
+                      border: Border.all(color: Colors.grey.shade300),
+                      borderRadius: BorderRadius.circular(8)
+                  ),
+                  alignment: Alignment.center,
+                  child: _buildPreviewContent(),
+                ),
+                SizedBox(height: 15),
+                // Status Text
+                Text(
+                  status,
+                  style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: statusColor
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          SizedBox(height: 10),
+
+          // 2. Control Button
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20),
+            child: SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: isScanning ? Colors.red : Color(0xFF2196F3),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                    elevation: 2
+                ),
+                onPressed: isScanning ? _stopScanningSession : _startScanningSession,
+                child: Text(
+                  isScanning ? "STOP SCANNING" : "START MATCHING",
+                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 1),
+                ),
+              ),
+            ),
+          ),
+
+          SizedBox(height: 10),
+
+          // 3. Matched List
+          Expanded(
+            child: matchedResults.isEmpty
+                ? (isScanning
+                ? Center(child: Text("Place finger on sensor...", style: TextStyle(color: Colors.grey, fontStyle: FontStyle.italic)))
+                : SizedBox())
+                : ListView.builder(
+              padding: EdgeInsets.all(10),
+              itemCount: matchedResults.length,
+              itemBuilder: (context, index) {
+                final item = matchedResults[index];
+                return Container(
+                  margin: EdgeInsets.only(bottom: 10),
+                  padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(8),
+                      boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 2, offset: Offset(0, 1))]
+                  ),
+                  child: Row(
+                    children: [
+                      // Icon Box
+                      Container(
+                        width: 40, height: 40,
+                        decoration: BoxDecoration(color: Color(0xFFE8F5E9), shape: BoxShape.circle),
+                        alignment: Alignment.center,
+                        child: Icon(Icons.check, color: Color(0xFF4CAF50), size: 24),
+                      ),
+                      SizedBox(width: 15),
+                      // Name & ID
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(item['name'], style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black87)),
+                            Text("User ID: ${item['id']}", style: TextStyle(fontSize: 12, color: Colors.grey)),
+                          ],
+                        ),
+                      ),
+                      // Score
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text("SCORE", style: TextStyle(fontSize: 10, color: Colors.grey, fontWeight: FontWeight.bold)),
+                          Text("${item['score']}", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF2196F3))),
+                        ],
+                      )
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
         ],
       ),
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-          title: Text("Identify User"),
-          backgroundColor: Color(0xFF0F172A),
-          foregroundColor: Colors.white
-      ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            // Preview Box
-            Container(
-              width: 160,
-              height: 200,
-              decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(
-                      color: isScanning ? Colors.blue : (statusColor == Colors.green ? Colors.green : Colors.grey),
-                      width: 2
-                  ),
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [BoxShadow(blurRadius: 10, color: Colors.black12)]
-              ),
-              child: livePreviewImage != null
-                  ? ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: Image.memory(livePreviewImage!, fit: BoxFit.contain, gaplessPlayback: true),
-              )
-                  : Icon(Icons.fingerprint, size: 80, color: Colors.grey[300]),
-            ),
-            SizedBox(height: 20),
-
-            // Status Text
-            Text(
-              status,
-              style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: statusColor
-              ),
-            ),
-            SizedBox(height: 40),
-
-            // Scan Button
-            SizedBox(
-              width: 200,
-              height: 50,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: isScanning ? Colors.grey : Color(0xFF0EA5E9),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                ),
-                onPressed: isScanning ? null : _startCapture,
-                icon: isScanning
-                    ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : Icon(Icons.search, color: Colors.white),
-                label: Text(
-                  isScanning ? "SCANNING..." : "START MATCH",
-                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-              ),
-            )
-          ],
-        ),
-      ),
-    );
+  Widget _buildPreviewContent() {
+    if (livePreviewImage != null) {
+      return Image.memory(livePreviewImage!, fit: BoxFit.contain, gaplessPlayback: true);
+    } else {
+      // Placeholder Icon
+      return Icon(
+          Icons.fingerprint,
+          size: 60,
+          color: isScanning ? Colors.blue.withOpacity(0.5) : Colors.grey.withOpacity(0.5)
+      );
+    }
   }
 }
