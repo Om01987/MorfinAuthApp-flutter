@@ -57,7 +57,7 @@ class DatabaseHelper {
     // Instead of query('users'), we specify ONLY the columns we need
     return await db.query(
         'users',
-        columns: ['id', 'user_name'] // This ignores all the fingerprint columns!
+        columns: ['id', 'user_name']
     );
   }
 

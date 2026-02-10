@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:fluttertoast/fluttertoast.dart';
 import '../providers/app_state_provider.dart';
 import '../database/database_helper.dart';
 
@@ -42,8 +43,13 @@ class _MatchingScreenState extends State<MatchingScreen> {
   void dispose() {
     stopScanning = true;
     _debounceTimer?.cancel();
+    // Safety check: Only try to stop capture if provider/service is still valid
     if (mounted) {
-      Provider.of<AppStateProvider>(context, listen: false).service.stopCapture();
+      try {
+        Provider.of<AppStateProvider>(context, listen: false).service.stopCapture();
+      } catch (e) {
+        print("Error stopping capture on dispose: $e");
+      }
     }
     super.dispose();
   }
@@ -84,12 +90,10 @@ class _MatchingScreenState extends State<MatchingScreen> {
           // Template failed (bad capture?), treat as no-match cycle
           _handleResetCycle("Capture Error", false);
         }
-      }
-      else if (errorCode == -2019) {
+      } else if (errorCode == -2019) {
         // Timeout -> Clear everything and retry immediately
         _handleTimeout();
-      }
-      else {
+      } else {
         // Other Errors -> Show error, wait, then retry
         _updateStatus("Error: $errorCode", Colors.red);
         // We do NOT clear list here, just retry
@@ -189,8 +193,7 @@ class _MatchingScreenState extends State<MatchingScreen> {
             Uint8List storedTemplate = base64Decode(b64Template);
             int score = await service.matchTemplates(
                 liveTemplate: liveTemplate,
-                storedTemplate: storedTemplate
-            );
+                storedTemplate: storedTemplate);
 
             if (score >= 96) {
               _addMatchResult(user['user_name'], user['id'], score);
@@ -242,13 +245,33 @@ class _MatchingScreenState extends State<MatchingScreen> {
   }
 
   void _updateStatus(String msg, Color color) {
-    if (mounted) setState(() { status = msg; statusColor = color; });
+    if (mounted) setState(() {
+      status = msg;
+      statusColor = color;
+    });
   }
 
   // --- UI Building ---
 
   @override
   Widget build(BuildContext context) {
+    // 1. Listen to the AppState (Brain)
+    final appState = Provider.of<AppStateProvider>(context);
+
+    // 2. Safety Navigation (Copied from EnrollmentScreen)
+    // If the brain says "Disconnected", kick the user out safely.
+    if (!appState.isConnected) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        // 'mounted' check is crucial. It prevents popping if we are already gone.
+        if (mounted) {
+          // Use popUntil to go back to the FIRST screen (Home)
+          // This prevents "Black Screen" issues if you pop the last route.
+          Navigator.of(context).popUntil((route) => route.isFirst);
+          Fluttertoast.showToast(msg: "Device disconnected");
+        }
+      });
+    }
+
     return Scaffold(
       backgroundColor: Color(0xFFF5F5F5), // Light Grey bg like RN
       appBar: AppBar(
@@ -274,8 +297,7 @@ class _MatchingScreenState extends State<MatchingScreen> {
                   decoration: BoxDecoration(
                       color: Colors.white,
                       border: Border.all(color: Colors.grey.shade300),
-                      borderRadius: BorderRadius.circular(8)
-                  ),
+                      borderRadius: BorderRadius.circular(8)),
                   alignment: Alignment.center,
                   child: _buildPreviewContent(),
                 ),
@@ -286,8 +308,7 @@ class _MatchingScreenState extends State<MatchingScreen> {
                   style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
-                      color: statusColor
-                  ),
+                      color: statusColor),
                 ),
               ],
             ),
@@ -303,14 +324,20 @@ class _MatchingScreenState extends State<MatchingScreen> {
               height: 50,
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(
-                    backgroundColor: isScanning ? Colors.red : Color(0xFF2196F3),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                    elevation: 2
-                ),
-                onPressed: isScanning ? _stopScanningSession : _startScanningSession,
+                    backgroundColor:
+                    isScanning ? Colors.red : Color(0xFF2196F3),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30)),
+                    elevation: 2),
+                onPressed:
+                isScanning ? _stopScanningSession : _startScanningSession,
                 child: Text(
                   isScanning ? "STOP SCANNING" : "START MATCHING",
-                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 1),
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1),
                 ),
               ),
             ),
@@ -322,7 +349,11 @@ class _MatchingScreenState extends State<MatchingScreen> {
           Expanded(
             child: matchedResults.isEmpty
                 ? (isScanning
-                ? Center(child: Text("Place finger on sensor...", style: TextStyle(color: Colors.grey, fontStyle: FontStyle.italic)))
+                ? Center(
+                child: Text("Place finger on sensor...",
+                    style: TextStyle(
+                        color: Colors.grey,
+                        fontStyle: FontStyle.italic)))
                 : SizedBox())
                 : ListView.builder(
               padding: EdgeInsets.all(10),
@@ -335,16 +366,24 @@ class _MatchingScreenState extends State<MatchingScreen> {
                   decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(8),
-                      boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 2, offset: Offset(0, 1))]
-                  ),
+                      boxShadow: [
+                        BoxShadow(
+                            color: Colors.black12,
+                            blurRadius: 2,
+                            offset: Offset(0, 1))
+                      ]),
                   child: Row(
                     children: [
                       // Icon Box
                       Container(
-                        width: 40, height: 40,
-                        decoration: BoxDecoration(color: Color(0xFFE8F5E9), shape: BoxShape.circle),
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                            color: Color(0xFFE8F5E9),
+                            shape: BoxShape.circle),
                         alignment: Alignment.center,
-                        child: Icon(Icons.check, color: Color(0xFF4CAF50), size: 24),
+                        child: Icon(Icons.check,
+                            color: Color(0xFF4CAF50), size: 24),
                       ),
                       SizedBox(width: 15),
                       // Name & ID
@@ -352,8 +391,14 @@ class _MatchingScreenState extends State<MatchingScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(item['name'], style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black87)),
-                            Text("User ID: ${item['id']}", style: TextStyle(fontSize: 12, color: Colors.grey)),
+                            Text(item['name'],
+                                style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.black87)),
+                            Text("User ID: ${item['id']}",
+                                style: TextStyle(
+                                    fontSize: 12, color: Colors.grey)),
                           ],
                         ),
                       ),
@@ -361,8 +406,16 @@ class _MatchingScreenState extends State<MatchingScreen> {
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          Text("SCORE", style: TextStyle(fontSize: 10, color: Colors.grey, fontWeight: FontWeight.bold)),
-                          Text("${item['score']}", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF2196F3))),
+                          Text("SCORE",
+                              style: TextStyle(
+                                  fontSize: 10,
+                                  color: Colors.grey,
+                                  fontWeight: FontWeight.bold)),
+                          Text("${item['score']}",
+                              style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF2196F3))),
                         ],
                       )
                     ],
@@ -378,14 +431,15 @@ class _MatchingScreenState extends State<MatchingScreen> {
 
   Widget _buildPreviewContent() {
     if (livePreviewImage != null) {
-      return Image.memory(livePreviewImage!, fit: BoxFit.contain, gaplessPlayback: true);
+      return Image.memory(livePreviewImage!,
+          fit: BoxFit.contain, gaplessPlayback: true);
     } else {
       // Placeholder Icon
-      return Icon(
-          Icons.fingerprint,
+      return Icon(Icons.fingerprint,
           size: 60,
-          color: isScanning ? Colors.blue.withOpacity(0.5) : Colors.grey.withOpacity(0.5)
-      );
+          color: isScanning
+              ? Colors.blue.withOpacity(0.5)
+              : Colors.grey.withOpacity(0.5));
     }
   }
 }

@@ -48,7 +48,7 @@ dependencies:
 
   # Your Local Plugin (IMPORTANT: Check this path)
   morfin_auth:
-    path: ../plugin  # <--- Make sure your plugin folder is here relative to this app
+    path: ../plugin
 
 dev_dependencies:
   flutter_test:

@@ -31,7 +31,7 @@ class MyApp extends StatelessWidget {
         // Start at the Home Screen
         home: HomeScreen(),
 
-        // Define navigation routes
+        // navigation routes
         routes: {
           '/enroll': (context) => EnrollmentScreen(),
           '/users': (context) => UserListScreen(),
